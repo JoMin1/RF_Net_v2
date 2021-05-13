@@ -108,30 +108,17 @@ class Decoder(nn.Module):
 
         main = nn.Sequential()
         # input is Z, going into a convolution
-        main.add_module('initial-{0}-{1}-convt'.format(nz, cngf),
-                        nn.ConvTranspose2d(nz, cngf, 4, 1, 0, bias=False))
-        main.add_module('initial-{0}-relu'.format(cngf),
-                        nn.ReLU(inplace))
+        main.add_module('initial-{0}-{1}-convt'.format(nz, cngf), nn.ConvTranspose2d(nz, cngf, 4, 1, 0, bias=False))
+        main.add_module('initial-{0}-batchnorm'.format(cngf), nn.BatchNorm2d(cngf))
+        main.add_module('initial-{0}-relu'.format(cngf), nn.ReLU(inplace))
 
         csize, _ = 4, cngf
         while csize < isize // 2:
-            in_feat = cndf
-            out_feat = cndf // 2
-            main.add_module('pyramid-{0}-{1}-convt'.format(in_feat, out_feat),
-                            nn.ConvTranspose2d(in_feat, out_feat, 4, 2, 1, bias=False))
-            main.add_module('pyramid-{0}-batchnorm'.format(out_feat),
-                            nn.BatchNorm2d(out_feat))
-            main.add_module('pyramid-{0}-relu'.format(out_feat),
-                            nn.ReLU(inplace))
-
-            # """수정"""
-            # main.add_module('extra-layers-{0}-{1}-conv'.format(out_feat, out_feat),
-            #                 nn.Conv2d(out_feat, out_feat, 3, 1, 1, bias=False))
-            # main.add_module('extra-layers-{0}-{1}-batchnorm'.format(out_feat, out_feat),
-            #                 nn.BatchNorm2d(out_feat))
-            # main.add_module('extra-layers-{0}-{1}-relu'.format(out_feat, out_feat),
-            #                 nn.LeakyReLU(0.2, inplace=inplace))
-            # """"""
+            in_feat = cngf
+            out_feat = cngf // 2
+            main.add_module('pyramid-{0}-{1}-convt'.format(in_feat, out_feat), nn.ConvTranspose2d(in_feat, out_feat, 4, 2, 1, bias=False))
+            main.add_module('pyramid-{0}-batchnorm'.format(out_feat), nn.BatchNorm2d(out_feat))
+            main.add_module('pyramid-{0}-relu'.format(out_feat), nn.ReLU(inplace))
 
             cngf = cngf // 2
             csize = csize * 2

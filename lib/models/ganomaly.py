@@ -52,10 +52,9 @@ class Ganomaly(BaseModel):
             self.netd.load_state_dict(torch.load(os.path.join(self.opt.resume, 'netD.pth'))['state_dict'])
             print("\tDone.\n")
 
-        self.l_adv = l2_loss
+        self.l_adv = nn.BCELoss()
         self.l_con = nn.L1Loss()
-        self.l_enc = l2_loss
-        self.l_bce = nn.BCELoss()
+        self.l_lat = l2_loss
 
         ##
         # Initialize input tensors.
@@ -84,47 +83,51 @@ class Ganomaly(BaseModel):
         """ Forward propagate through netD
         """
         self.pred_real, self.feat_real = self.netd(self.input)
-        self.pred_fake, self.feat_fake = self.netd(self.fake.detach())
+        self.pred_fake, self.feat_fake = self.netd(self.fake)
 
     ##
-    def backward_g(self):
+    def backward_g(self, data):
         """ Backpropagate through netG
         """
-        self.err_g_adv = self.opt.w_adv * self.l_adv(self.feat_fake, self.feat_real)
-        self.err_g_con = self.opt.w_con * self.l_con(self.fake, self.input)
-        self.err_g_lat = self.opt.w_lat * self.l_enc(self.latent_o, self.latent_i)
-        self.err_g = self.err_g_adv + self.err_g_con + self.err_g_lat
+        if data[1].item() == 0:
+            self.err_g_con = self.l_con(self.fake, self.input)
+        else:
+            self.err_g_con = torch.pow(self.l_con(self.fake, self.input), -1)
+
+        self.err_g = self.err_g_con
         self.err_g.backward(retain_graph=True)
 
     ##
-    def backward_d(self):
+    def backward_d(self, data):
         """ Backpropagate through netD
         """
-        # Real - Fake Loss
-        self.err_d_real = self.l_bce(self.pred_real, self.real_label)
-        self.err_d_fake = self.l_bce(self.pred_fake, self.fake_label)
+        pred_fake, feat_fake = self.netd(self.fake.detach())
 
-        # NetD Loss & Backward-Pass
-        self.err_d = (self.err_d_real + self.err_d_fake) * 0.5
+        if data[1].item() == 0:
+            self.err_d_lat = self.l_lat(feat_fake, self.feat_real)
+        else:
+            self.err_d_lat = torch.pow(self.l_lat(feat_fake, self.feat_real), -1)
+
+        print("   ------ ", self.err_d_lat.item(), data[1].item())
+
+        # Combine losses.
+        self.err_d = self.err_d_lat
         self.err_d.backward()
     
     ##
-    def optimize_params(self):
+    def optimize_params(self, data):
         """ Forwardpass, Loss Computation and Backwardpass.
         """
-        # Forward-pass
+        self.optimizer_g.zero_grad()
+        self.optimizer_d.zero_grad()
+
         self.forward_g()
         self.forward_d()
 
-        # Backward-pass
-        # netg
-        self.optimizer_g.zero_grad()
-        self.backward_g()
-        self.optimizer_g.step()
+        self.backward_g(data)
+        self.backward_d(data)
 
-        # netd
-        self.optimizer_d.zero_grad()
-        self.backward_d()
+        self.optimizer_g.step()
         self.optimizer_d.step()
         if self.err_d.item() < 1e-5: self.reinit_d()
 
@@ -155,27 +158,85 @@ class Ganomaly(BaseModel):
             # Create big error tensor for the test set.
             self.an_scores = torch.zeros(size=(len(self.data.valid.dataset),), dtype=torch.float32, device=self.device)
             self.gt_labels = torch.zeros(size=(len(self.data.valid.dataset),), dtype=torch.long,    device=self.device)
-            self.latent_i  = torch.zeros(size=(len(self.data.valid.dataset), self.opt.nz), dtype=torch.float32, device=self.device)
             self.latent_o  = torch.zeros(size=(len(self.data.valid.dataset), self.opt.nz), dtype=torch.float32, device=self.device)
+            self.latent_i  = torch.zeros(size=(len(self.data.valid.dataset), self.opt.nz), dtype=torch.float32, device=self.device)
+
+            self.recon_an_scores = torch.zeros(size=(len(self.data.valid.dataset),), dtype=torch.float32, device=self.device)
+            self.recon_gt_labels = torch.zeros(size=(len(self.data.valid.dataset),), dtype=torch.long, device=self.device)
+            self.recon_o = torch.zeros(size=(len(self.data.valid.dataset), self.opt.nz), dtype=torch.float32, device=self.device)
+            self.recon_i = torch.zeros(size=(len(self.data.valid.dataset), self.opt.nz), dtype=torch.float32, device=self.device)
+
+            self.feat_an_scores = torch.zeros(size=(len(self.data.valid.dataset),), dtype=torch.float32, device=self.device)
+            self.feat_gt_labels = torch.zeros(size=(len(self.data.valid.dataset),), dtype=torch.long, device=self.device)
+            self.feat_R = torch.zeros(size=(len(self.data.valid.dataset), self.opt.nz), dtype=torch.float32,device=self.device)
+            self.feat_F = torch.zeros(size=(len(self.data.valid.dataset), self.opt.nz), dtype=torch.float32,device=self.device)
+
+            self.disc_an_scores = torch.zeros(size=(len(self.data.valid.dataset),), dtype=torch.float32, device=self.device)
+            self.disc_gt_labels = torch.zeros(size=(len(self.data.valid.dataset),), dtype=torch.long, device=self.device)
+            self.disc_R = torch.zeros(size=(len(self.data.valid.dataset), self.opt.nz), dtype=torch.float32,device=self.device)
+            self.disc_F = torch.zeros(size=(len(self.data.valid.dataset), self.opt.nz), dtype=torch.float32,device=self.device)
 
             # print("   Testing model %s." % self.name)
             self.times = []
             self.total_steps = 0
             epoch_iter = 0
+            rec_wei = 0.9
+            lat_wei = 0.1
+
             for i, data in enumerate(self.data.valid, 0):
                 self.total_steps += self.opt.batchsize
                 epoch_iter += self.opt.batchsize
                 time_i = time.time()
                 self.set_input(data)
-                self.fake, latent_i, latent_o = self.netg(self.input)
 
-                error = torch.mean(torch.pow((latent_i-latent_o), 2), dim=1)
+                self.fake, latent_i, latent_o = self.netg(self.input)
+                self.real_disc, self.real_feat = self.netd(self.input)
+                self.fake_disc, self.fake_feat = self.netd(self.fake)
+
+                si = self.input.size()
+                sz = self.real_feat.size()
+                sd = self.real_disc.size()
+
+                rec = (self.input - self.fake).view(si[0], si[1] * si[2] * si[3])
+                feat = (self.real_feat - self.fake_feat).view(sz[0], sz[1] * sz[2] * sz[3])
+                adv_real = (self.real_disc - self.real_label).view(sd[0], 1)
+                adv_fake = (self.fake_disc - self.fake_label).view(sd[0], 1)
+
+                error_recon = torch.mean(torch.pow(rec, 2), dim=1)
+                error_feat = torch.mean(torch.pow(feat, 2), dim=1)
+                error_discL1 = torch.mean(torch.abs(adv_real), dim=1) + torch.mean(torch.abs(adv_fake), dim=1)
+                error_discL2 = torch.mean(torch.pow(adv_real, 2), dim=1) + torch.mean(torch.pow(adv_fake, 2), dim=1)
+                error = rec_wei * error_recon + lat_wei * error_feat
+
                 time_o = time.time()
 
-                self.an_scores[i*self.opt.batchsize : i*self.opt.batchsize+error.size(0)] = error.reshape(error.size(0))
-                self.gt_labels[i*self.opt.batchsize : i*self.opt.batchsize+error.size(0)] = self.gt.reshape(error.size(0))
-                self.latent_i [i*self.opt.batchsize : i*self.opt.batchsize+error.size(0), :] = latent_i.reshape(error.size(0), self.opt.nz)
-                self.latent_o [i*self.opt.batchsize : i*self.opt.batchsize+error.size(0), :] = latent_o.reshape(error.size(0), self.opt.nz)
+                """ reconstruction """
+                self.recon_an_scores[
+                i * self.opt.batchsize: i * self.opt.batchsize + error_recon.size(0)] = error_recon.reshape(error_recon.size(0))
+                self.recon_gt_labels[
+                i * self.opt.batchsize: i * self.opt.batchsize + error_recon.size(0)] = self.gt.reshape(error_recon.size(0))
+                # self.recon_i[i * self.opt.batchsize: i * self.opt.batchsize + error_recon.size(0), :] = self.input.reshape(error_recon.size(0), self.opt.nz)
+                # self.recon_o[i * self.opt.batchsize: i * self.opt.batchsize + error_recon.size(0), :] = self.fake.reshape(error_recon.size(0), self.opt.nz)
+
+                """ feature """
+                self.feat_an_scores[
+                i * self.opt.batchsize: i * self.opt.batchsize + error_feat.size(0)] = error_feat.reshape(error_feat.size(0))
+                self.feat_gt_labels[
+                i * self.opt.batchsize: i * self.opt.batchsize + error_feat.size(0)] = self.gt.reshape(error_feat.size(0))
+                # self.feat_R[i * self.opt.batchsize: i * self.opt.batchsize + error_feat.size(0), :] = self.real_feat.reshape(error_feat.size(0), self.opt.nz)
+                # self.feat_F[i * self.opt.batchsize: i * self.opt.batchsize + error_feat.size(0), :] = self.fake_feat.reshape(error_feat.size(0), self.opt.nz)
+
+                """ 0.9 : 0.1 """
+                self.an_scores[i * self.opt.batchsize: i * self.opt.batchsize + error.size(0)] = error.reshape(error.size(0))
+                self.gt_labels[i * self.opt.batchsize: i * self.opt.batchsize + error.size(0)] = self.gt.reshape(error.size(0))
+                # self.latent_i[i*self.opt.batchsize : i*self.opt.batchsize+error_latent.size(0), :] = latent_i.reshape(error_latent.size(0), self.opt.nz)
+                # self.latent_o[i*self.opt.batchsize : i*self.opt.batchsize+error_latent.size(0), :] = latent_o.reshape(error_latent.size(0), self.opt.nz)
+
+                """ adv L2 """
+                self.disc_an_scores[i * self.opt.batchsize: i * self.opt.batchsize + error_discL2.size(0)] = error_discL2.reshape(error_discL2.size(0))
+                self.disc_gt_labels[i * self.opt.batchsize: i * self.opt.batchsize + error_discL2.size(0)] = self.gt.reshape(error_discL2.size(0))
+                # self.disc_R[i * self.opt.batchsize: i * self.opt.batchsize + error_disc.size(0), :] = self.real_disc.reshape(error_disc.size(0), self.opt.nz)
+                # self.disc_F[i * self.opt.batchsize: i * self.opt.batchsize + error_disc.size(0), :] = self.fake_disc.reshape(error_disc.size(0), self.opt.nz)
 
                 self.times.append(time_o - time_i)
 
@@ -193,9 +254,32 @@ class Ganomaly(BaseModel):
             self.times = np.mean(self.times[:100] * 1000)
 
             # Scale error vector between [0, 1]
+            """ reconstruction """
+            self.recon_an_scores = (self.recon_an_scores - torch.min(self.recon_an_scores)) / (torch.max(self.recon_an_scores) - torch.min(self.recon_an_scores))
+            print('recon : ', self.recon_an_scores)
+
+            recon_auc = evaluate(self.recon_gt_labels, self.recon_an_scores, metric=self.opt.metric)
+
+            """ feature """
+            self.feat_an_scores = (self.feat_an_scores - torch.min(self.feat_an_scores)) / (torch.max(self.feat_an_scores) - torch.min(self.feat_an_scores))
+            print('feature : ', self.feat_an_scores)
+
+            feat_auc = evaluate(self.feat_gt_labels, self.feat_an_scores, metric=self.opt.metric)
+
+            """ 0.1 : 0.9 """
             self.an_scores = (self.an_scores - torch.min(self.an_scores)) / (torch.max(self.an_scores) - torch.min(self.an_scores))
+            print('AUC : ', self.an_scores)
+
             auc = evaluate(self.gt_labels, self.an_scores, metric=self.opt.metric)
-            performance = OrderedDict([('Avg Run Time (ms/batch)', self.times), ('AUC', auc)])
+
+            """ Norm 0.1 : 0.9 """
+            self.Norm_an_scores = rec_wei * self.recon_an_scores + lat_wei * self.feat_an_scores
+            self.Norm_an_scores = (self.Norm_an_scores - torch.min(self.Norm_an_scores)) / (torch.max(self.Norm_an_scores) - torch.min(self.Norm_an_scores))
+            print('norm_AUC : ', self.Norm_an_scores)
+
+            norm_auc = evaluate(self.disc_gt_labels, self.Norm_an_scores, metric=self.opt.metric)
+
+            performance = OrderedDict([('Avg Run Time (ms/batch)', self.times), ('   recon_AUC', recon_auc), ('   feat_AUC', feat_auc), ('   norm AUC', norm_auc), ('   AUC', auc)])
 
             if self.opt.display_id > 0 and self.opt.phase == 'test':
                 counter_ratio = float(epoch_iter) / len(self.data.valid.dataset)

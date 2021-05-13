@@ -103,31 +103,6 @@ class Skipganomaly(BaseModel):
         self.pred_real, self.feat_real = self.netd(self.input)
         self.pred_fake, self.feat_fake = self.netd(self.fake)
 
-    # def backward_g(self):
-    #     """ Backpropagate netg
-    #     """
-    #     self.err_g_adv = self.opt.w_adv * self.l_adv(self.pred_fake, self.real_label)
-    #     self.err_g_con = self.opt.w_con * self.l_con(self.fake, self.input)
-    #     self.err_g_lat = self.opt.w_lat * self.l_lat(self.feat_fake, self.feat_real)
-    #
-    #     self.err_g = self.err_g_adv + self.err_g_con + self.err_g_lat
-    #     self.err_g.backward(retain_graph=True)
-    #
-    # def backward_d(self):
-    #     # Fake
-    #     pred_fake, _ = self.netd(self.fake)
-    #     self.err_d_fake = self.l_adv(pred_fake, self.fake_label)
-    #
-    #     # Real
-    #     # pred_real, feat_real = self.netd(self.input)
-    #     self.err_d_real = self.l_adv(self.pred_real, self.real_label)
-    #
-    #     # print("   ------ ", self.pred_fake.item(), self.pred_real.item())
-    #
-    #     # Combine losses.
-    #     self.err_d = self.err_d_real + self.err_d_fake + self.err_g_lat
-    #     self.err_d.backward()
-
     def backward_g(self, data):
         """ Backpropagate netg
         """
@@ -148,7 +123,7 @@ class Skipganomaly(BaseModel):
         else:
             self.err_d_lat = torch.pow(self.l_lat(feat_fake, self.feat_real), -1)
 
-        # print("   ------ ", self.err_d_lat.item())
+        print("   ------ ", self.err_d_lat.item(), data[1].item())
 
         # Combine losses.
         self.err_d = self.err_d_lat
@@ -238,9 +213,7 @@ class Skipganomaly(BaseModel):
                 si = self.input.size()
                 sz = self.real_feat.size()
                 sd = self.real_disc.size()
-                # print(sd[0])
-                # print(self.disc_real)
-                # print(self.disc_fake)
+
                 rec = (self.input - self.fake).view(si[0], si[1] * si[2] * si[3])
                 feat = (self.real_feat - self.fake_feat).view(sz[0], sz[1] * sz[2] * sz[3])
                 adv_real = (self.real_disc - self.real_label).view(sd[0], 1)
@@ -252,59 +225,7 @@ class Skipganomaly(BaseModel):
                 error_discL2 = torch.mean(torch.pow(adv_real, 2), dim=1) + torch.mean(torch.pow(adv_fake, 2), dim=1)
                 error = rec_wei * error_recon + lat_wei * error_feat
 
-
-                # print('latent : {}, feat : {}'.format(error_latent, error_feat))
-
-                # print(self.fake_disc)
-                # print(self.real_disc)
-
-
-                """ From skip"""
-                # self.disc_real, self.feat_real = self.netd(self.input)
-                # self.disc_fake, self.feat_fake = self.netd(self.fake)
-                # Calculate the anomaly score.
-                # si = self.input.size()
-                # sz = self.feat_real.size()
-                # sd = self.disc_real.size()
-                # # print(sd[0])
-                # # print(self.disc_real)
-                # # print(self.disc_fake)
-                # rec = (self.input - self.fake).view(si[0], si[1] * si[2] * si[3])
-                # lat = (self.feat_real - self.feat_fake).view(sz[0], sz[1] * sz[2] * sz[3])
-                # adv = (self.disc_real - self.disc_fake).view(sd[0], 1)
-                # rec = torch.mean(torch.pow(rec, 2), dim=1)
-                # lat = torch.mean(torch.pow(lat, 2), dim=1)
-                # adv = torch.mean(torch.pow(adv, 2), dim=1)
-                # # print('adv : ', adv)
-                # # print("rec : ", rec)
-                # # print("lat : ", lat)
-                # # error = 0.9*rec + 0.1*lat
-                # error = 0.1 * rec + 0.1 * lat + 0.8 * adv
-                """ --------------------------- """
-
-                # error_recon = torch.mean(torch.pow((self.input - self.fake), 2), dim=1)
-                # error_feat = torch.mean(torch.pow((self.real_feat - self.fake_feat), 2), dim=1)
-
-                # print(latent_i.shape)
-                # print(torch.pow((latent_i - latent_o), 2).shape)
-                # print(torch.mean(torch.pow((latent_i - latent_o), 2), dim=1).shape)
-                # print(torch.mean(torch.pow((latent_i - latent_o), 2), dim=1).size(0))
-                # print(error_latent.reshape(torch.mean(torch.pow((latent_i - latent_o), 2), dim=1).size(0)))
-                #
-                # print('')
-                # print(self.real_feat.shape)
-                # print(torch.pow((self.real_feat - self.fake_feat), 2).shape)
-                # print(torch.mean(torch.pow((self.real_feat - self.fake_feat), 2), dim=1).shape)
-                # print(torch.mean(torch.pow((self.real_feat - self.fake_feat), 2), dim=1).size(0))
-                # print(error_feat.reshape(torch.mean(torch.pow((self.real_feat - self.fake_feat), 2), dim=1).size(0)))
-                # print(self.real_disc.shape)
-                # print(torch.pow((self.real_disc - self.fake_disc), 2).shape)
-
-                # error_disc = torch.pow((self.real_disc - self.fake_disc), 2)
-
                 time_o = time.time()
-
-
 
                 """ reconstruction """
                 self.recon_an_scores[i * self.opt.batchsize: i * self.opt.batchsize + error_recon.size(0)] = error_recon.reshape(error_recon.size(0))
@@ -374,7 +295,6 @@ class Skipganomaly(BaseModel):
             norm_auc = roc(self.disc_gt_labels, self.Norm_an_scores)
 
             performance = OrderedDict([('Avg Run Time (ms/batch)', self.times), ('   recon_AUC', recon_auc), ('   feat_AUC', feat_auc), ('   norm AUC', norm_auc), ('   AUC', auc)])
-
 
 
             if self.opt.display_id > 0 and self.opt.phase == 'test':
