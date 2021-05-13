@@ -1,0 +1,1 @@
+python3 train.py --dataset bottle --dataroot C:\Users\twim\Downloads\skip-ganomaly-master\skip-ganomaly-master\data\bottle --nz 500 --ngf 80 --ndf 80 --niter 10000 --isize 256 --batchsize 1
