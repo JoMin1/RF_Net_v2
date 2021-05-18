@@ -133,18 +133,30 @@ class Skipganomaly(BaseModel):
     def optimize_params(self, data):
         """ Optimize netD and netG  networks.
         """
-        self.optimizer_g.zero_grad()
-        self.optimizer_d.zero_grad()
+        if data[1].item() == 0:
+            self.optimizer_g.zero_grad()
+            self.optimizer_d.zero_grad()
 
-        self.forward()
+            self.forward()
 
-        self.backward_g(data)
-        self.backward_d(data)
+            self.backward_g(data)
+            self.backward_d(data)
 
-        self.optimizer_g.step()
-        self.optimizer_d.step()
+            self.optimizer_g.step()
+            self.optimizer_d.step()
+        else:
+            # self.optimizer_g.zero_grad()
+            self.optimizer_d.zero_grad()
 
-        if self.err_d < 1e-5: self.reinit_d()
+            self.forward()
+
+            self.backward_d(data)
+
+            self.optimizer_d.step()
+
+
+
+
 
     ##
     def test(self):
@@ -287,8 +299,8 @@ class Skipganomaly(BaseModel):
 
             auc = roc(self.gt_labels, self.an_scores)
 
-            """ Norm 0.1 : 0.9 """
-            self.Norm_an_scores = rec_wei * self.recon_an_scores + lat_wei * self.feat_an_scores
+            """ Norm """
+            self.Norm_an_scores = self.recon_an_scores + self.feat_an_scores
             self.Norm_an_scores = (self.Norm_an_scores - torch.min(self.Norm_an_scores)) / (torch.max(self.Norm_an_scores) - torch.min(self.Norm_an_scores))
             print('norm_AUC : ', self.Norm_an_scores)
 
